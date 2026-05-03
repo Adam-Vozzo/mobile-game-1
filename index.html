@@ -65,15 +65,16 @@
   const STATE_READY = 0, STATE_PLAY = 1, STATE_OVER = 2;
   let state = STATE_READY;
 
-  // Tuning — faster, tighter than the Flappy original
-  const GRAVITY = 1900;
-  const SCROLL_SPEED = 220;
-  const WALL_INTERVAL = 1.05;
+  // Tuning — Maverick Bird-style: tap to flap, but everything is FAST
+  const GRAVITY = 2200;
+  const FLAP_VEL = -560;
+  const SCROLL_SPEED = 360;
+  const WALL_INTERVAL = 0.85;
   const WALL_THICK = 28;
-  const GAP_SIZE = 130;
+  const GAP_SIZE = 150;
   const PLAYER_X = 110;
   const PLAYER_SIZE = 14;
-  const TRAIL_MAX = 18;
+  const TRAIL_MAX = 22;
 
   const COL_BG = '#0a0612';
   const COL_PLAYER = '#ff0095';
@@ -84,7 +85,6 @@
   const COL_HUD = '#ffffff';
 
   let player, walls, score, best, spawnTimer, time, scrollOffset;
-  let gravityDir;
   let trail;
   let shake;
   let flashAlpha;
@@ -93,13 +93,12 @@
   best = parseInt(localStorage.getItem('maverick_best') || '0', 10) || 0;
 
   function reset() {
-    player = { x: PLAYER_X, y: H * 0.5, vy: 0, rot: 0 };
+    player = { x: PLAYER_X, y: H * 0.5, vy: 0, rot: 0, flapTimer: 0 };
     walls = [];
     score = 0;
     spawnTimer = 0;
     time = 0;
     scrollOffset = 0;
-    gravityDir = 1;
     trail = [];
     shake = 0;
     flashAlpha = 0;
@@ -116,14 +115,13 @@
     walls.push({ x: W + 10, top, passed: false });
   }
 
-  function flip() {
+  function flap() {
     if (state === STATE_READY) {
       state = STATE_PLAY;
     }
     if (state === STATE_PLAY) {
-      gravityDir = -gravityDir;
-      // small velocity kick in the new gravity direction so flips feel snappy
-      player.vy = gravityDir * 80;
+      player.vy = FLAP_VEL;
+      player.flapTimer = 0.15;
     } else if (state === STATE_OVER) {
       if (overTimer > 0.6) reset();
     }
@@ -131,13 +129,13 @@
 
   function onTap(e) {
     if (e.cancelable) e.preventDefault();
-    flip();
+    flap();
   }
   canvas.addEventListener('pointerdown', onTap, { passive: false });
   window.addEventListener('keydown', (e) => {
     if (e.code === 'Space' || e.code === 'ArrowUp' || e.code === 'KeyW') {
       e.preventDefault();
-      flip();
+      flap();
     }
   });
   document.addEventListener('gesturestart', (e) => e.preventDefault());
@@ -251,15 +249,14 @@
     ctx.shadowColor = COL_PLAYER_GLOW;
     ctx.shadowBlur = 22;
 
-    // arrow / triangular ship pointing right; flips orientation with gravity
+    // triangular ship pointing right
     const s = PLAYER_SIZE;
-    const flip = gravityDir;
     ctx.fillStyle = COL_PLAYER;
     ctx.beginPath();
-    ctx.moveTo(s * 1.1, 0);
-    ctx.lineTo(-s * 0.9, -s * flip);
+    ctx.moveTo(s * 1.2, 0);
+    ctx.lineTo(-s * 0.9, -s);
     ctx.lineTo(-s * 0.4, 0);
-    ctx.lineTo(-s * 0.9, s * flip);
+    ctx.lineTo(-s * 0.9, s);
     ctx.closePath();
     ctx.fill();
 
@@ -267,10 +264,10 @@
     ctx.shadowBlur = 0;
     ctx.fillStyle = '#ffffff';
     ctx.beginPath();
-    ctx.moveTo(s * 0.5, 0);
-    ctx.lineTo(-s * 0.2, -s * 0.4 * flip);
+    ctx.moveTo(s * 0.55, 0);
+    ctx.lineTo(-s * 0.2, -s * 0.4);
     ctx.lineTo(-s * 0.05, 0);
-    ctx.lineTo(-s * 0.2, s * 0.4 * flip);
+    ctx.lineTo(-s * 0.2, s * 0.4);
     ctx.closePath();
     ctx.fill();
 
@@ -324,10 +321,11 @@
     }
 
     if (state === STATE_PLAY) {
-      player.vy += GRAVITY * gravityDir * dt;
+      player.vy += GRAVITY * dt;
       player.y += player.vy * dt;
+      player.flapTimer = Math.max(0, player.flapTimer - dt);
 
-      const targetRot = Math.max(-0.6, Math.min(0.9, player.vy / 700)) * gravityDir;
+      const targetRot = Math.max(-0.7, Math.min(1.1, player.vy / 700));
       player.rot += (targetRot - player.rot) * Math.min(1, dt * 10);
 
       spawnTimer += dt;
@@ -404,7 +402,7 @@
 
     if (state === STATE_READY) {
       drawTextCentered('MAVERICK', 150, 44, COL_PLAYER, COL_PLAYER_GLOW);
-      drawTextCentered('TAP TO FLIP GRAVITY', H / 2 + 60, 18, COL_WALL, COL_WALL_GLOW);
+      drawTextCentered('TAP TO FLAP', H / 2 + 60, 18, COL_WALL, COL_WALL_GLOW);
       const pulse = 0.55 + Math.sin(time * 5) * 0.45;
       ctx.globalAlpha = pulse;
       drawTextCentered('TAP TO START', H / 2 + 100, 16, COL_HUD, null);
