@@ -74,7 +74,7 @@
   const GAP_SIZE = 150;
   const PLAYER_X = 110;
   const PLAYER_SIZE = 14;
-  const TRAIL_MAX = 22;
+  const TRAIL_MAX = 32;
 
   const COL_BG = '#0a0612';
   const COL_PLAYER = '#ff0095';
@@ -316,7 +316,7 @@
       player.y = H * 0.5 + Math.sin(time * 5) * 8;
       player.rot = Math.sin(time * 3) * 0.15;
       scrollOffset += SCROLL_SPEED * 0.4 * dt;
-      pushTrail();
+      pushTrail(SCROLL_SPEED * 0.4 * dt);
       return;
     }
 
@@ -357,7 +357,7 @@
       }
 
       scrollOffset += SCROLL_SPEED * dt;
-      pushTrail();
+      pushTrail(SCROLL_SPEED * dt);
     }
 
     if (state === STATE_OVER) {
@@ -366,8 +366,11 @@
     }
   }
 
-  function pushTrail() {
-    trail.push({ x: player.x, y: player.y });
+  function pushTrail(scrollDx) {
+    // existing points drift left at the scroll speed so the trail
+    // appears to come out of the bird's tail rather than stacking up
+    for (const t of trail) t.x -= scrollDx;
+    trail.push({ x: player.x - PLAYER_SIZE * 0.6, y: player.y });
     if (trail.length > TRAIL_MAX) trail.shift();
   }
 
