@@ -34,17 +34,80 @@
     box-shadow: 0 0 60px rgba(255, 0, 149, 0.25), 0 0 120px rgba(0, 212, 255, 0.15);
     touch-action: none;
   }
+  #rotate-prompt {
+    display: none;
+    position: fixed;
+    inset: 0;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    background: #0a0612;
+    color: #fff;
+    text-align: center;
+    padding: 24px;
+  }
+  #rotate-prompt .phone {
+    width: 56px;
+    height: 100px;
+    border: 4px solid #ff0095;
+    border-radius: 10px;
+    position: relative;
+    margin-bottom: 28px;
+    box-shadow: 0 0 22px rgba(255, 0, 149, 0.6);
+    animation: rotate-phone 2.4s cubic-bezier(.7,0,.3,1) infinite;
+  }
+  #rotate-prompt .phone::before {
+    content: '';
+    position: absolute;
+    top: 8px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 22px;
+    height: 4px;
+    background: #ff0095;
+    border-radius: 2px;
+    box-shadow: 0 0 8px #ff5cb8;
+  }
+  #rotate-prompt h1 {
+    font-size: 22px;
+    font-weight: 900;
+    letter-spacing: 3px;
+    color: #ff0095;
+    text-shadow: 0 0 14px #ff5cb8;
+    margin: 0 0 8px;
+  }
+  #rotate-prompt p {
+    font-size: 13px;
+    letter-spacing: 1.5px;
+    color: #00d4ff;
+    text-shadow: 0 0 10px #7df0ff;
+    margin: 0;
+  }
+  @keyframes rotate-phone {
+    0%, 30%   { transform: rotate(0deg); }
+    50%, 80%  { transform: rotate(-90deg); }
+    100%      { transform: rotate(-90deg); }
+  }
+  @media (orientation: portrait) {
+    #wrap { display: none; }
+    #rotate-prompt { display: flex; }
+  }
 </style>
 </head>
 <body>
 <div id="wrap"><canvas id="game"></canvas></div>
+<div id="rotate-prompt">
+  <div class="phone"></div>
+  <h1>ROTATE YOUR DEVICE</h1>
+  <p>MAVERICK IS A LANDSCAPE GAME</p>
+</div>
 <script>
 (() => {
   const canvas = document.getElementById('game');
   const ctx = canvas.getContext('2d');
 
-  const W = 360;
-  const H = 640;
+  const W = 640;
+  const H = 360;
 
   function resize() {
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -65,15 +128,15 @@
   const STATE_READY = 0, STATE_PLAY = 1, STATE_OVER = 2;
   let state = STATE_READY;
 
-  // Tuning — Maverick Bird-style: tap to flap, but everything is FAST
-  const GRAVITY = 1300;
-  const FLAP_VEL = -480;
-  const SCROLL_SPEED = 360;
-  const WALL_INTERVAL = 1.35;
-  const WALL_THICK = 28;
-  const GAP_SIZE = 150;
-  const PLAYER_X = 110;
-  const PLAYER_SIZE = 14;
+  // Tuning — Maverick Bird-style, landscape
+  const GRAVITY = 750;
+  const FLAP_VEL = -290;
+  const SCROLL_SPEED = 420;
+  const WALL_INTERVAL = 1.3;
+  const WALL_THICK = 26;
+  const GAP_SIZE = 105;
+  const PLAYER_X = 150;
+  const PLAYER_SIZE = 13;
   const TRAIL_MAX = 32;
 
   const COL_BG = '#0a0612';
@@ -108,7 +171,7 @@
   reset();
 
   function spawnWall() {
-    const margin = 60;
+    const margin = 30;
     const minTop = margin;
     const maxTop = H - GAP_SIZE - margin;
     const top = Math.random() * (maxTop - minTop) + minTop;
@@ -400,15 +463,15 @@
     drawPlayer();
 
     if (state === STATE_PLAY) {
-      drawTextCentered(String(score), 70, 56, COL_HUD, COL_PLAYER_GLOW);
+      drawTextCentered(String(score), 38, 36, COL_HUD, COL_PLAYER_GLOW);
     }
 
     if (state === STATE_READY) {
-      drawTextCentered('MAVERICK', 150, 44, COL_PLAYER, COL_PLAYER_GLOW);
-      drawTextCentered('TAP TO FLAP', H / 2 + 60, 18, COL_WALL, COL_WALL_GLOW);
+      drawTextCentered('MAVERICK', H * 0.32, 40, COL_PLAYER, COL_PLAYER_GLOW);
+      drawTextCentered('TAP TO FLAP', H * 0.58, 16, COL_WALL, COL_WALL_GLOW);
       const pulse = 0.55 + Math.sin(time * 5) * 0.45;
       ctx.globalAlpha = pulse;
-      drawTextCentered('TAP TO START', H / 2 + 100, 16, COL_HUD, null);
+      drawTextCentered('TAP TO START', H * 0.74, 14, COL_HUD, null);
       ctx.globalAlpha = 1;
     }
 
@@ -417,13 +480,13 @@
         ctx.fillStyle = `rgba(255, 0, 149, ${flashAlpha * 0.6})`;
         ctx.fillRect(0, 0, W, H);
       }
-      drawTextCentered('CRASHED', 200, 38, COL_PLAYER, COL_PLAYER_GLOW);
-      drawTextCentered(String(score), 280, 64, COL_HUD, COL_WALL_GLOW);
-      drawTextCentered('BEST  ' + best, 340, 18, COL_WALL, COL_WALL_GLOW);
+      drawTextCentered('CRASHED', H * 0.28, 32, COL_PLAYER, COL_PLAYER_GLOW);
+      drawTextCentered(String(score), H * 0.50, 48, COL_HUD, COL_WALL_GLOW);
+      drawTextCentered('BEST  ' + best, H * 0.68, 16, COL_WALL, COL_WALL_GLOW);
       if (overTimer > 0.6) {
         const pulse = 0.55 + Math.sin(time * 6) * 0.45;
         ctx.globalAlpha = pulse;
-        drawTextCentered('TAP TO RETRY', 420, 18, COL_HUD, null);
+        drawTextCentered('TAP TO RETRY', H * 0.84, 14, COL_HUD, null);
         ctx.globalAlpha = 1;
       }
     }
