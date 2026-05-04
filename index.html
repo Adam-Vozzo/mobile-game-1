@@ -184,7 +184,7 @@
       audioSource.loop = true;
       analyser = audioCtx.createAnalyser();
       analyser.fftSize = 512;
-      analyser.smoothingTimeConstant = 0.55;
+      analyser.smoothingTimeConstant = 0.2;
       audioSource.connect(analyser);
       analyser.connect(audioCtx.destination);
       audioSource.start();
@@ -196,25 +196,27 @@
 
   function tickBeat(now, dt) {
     beatPulse = Math.max(0, beatPulse - dt * 5);
+    let detected = false;
     if (analyser) {
       analyser.getByteFrequencyData(_freqBuf);
-      // bass band: lowest 5 bins (~0–215 Hz @ fftSize 512, sr 44.1k)
+      // wider band — kick + low mids — for songs without a clean bass-only thump
       let energy = 0;
-      for (let i = 1; i < 6; i++) energy += _freqBuf[i];
-      energy /= 5;
+      for (let i = 1; i < 9; i++) energy += _freqBuf[i];
+      energy /= 8;
       bassHist.push(energy);
       if (bassHist.length > 50) bassHist.shift();
       let avg = 0;
       for (const v of bassHist) avg += v;
       avg /= bassHist.length;
-      const ready = bassHist.length > 20;
-      if (ready && energy > avg * 1.45 && energy > 35 && now - lastBeatT > 0.18) {
+      if (bassHist.length > 20 && energy > avg * 1.22 && energy > 12 && now - lastBeatT > 0.18) {
         triggerBeat(now);
+        detected = true;
       }
-    } else if (audioStatus === 'fallback' || audioStatus === 'idle') {
-      // 120 BPM fallback so the world still throbs without audio
-      const period = 0.5;
-      if (now - lastBeatT > period) triggerBeat(now);
+    }
+    // safety pulse: if nothing has fired for 0.5s (no audio, or song with
+    // no detectable transients), throb at a steady 120 BPM
+    if (!detected && now - lastBeatT > 0.5) {
+      triggerBeat(now);
     }
   }
 
@@ -230,7 +232,10 @@
 
   function beatEase() {
     // sharp attack, smooth decay
-    return beatPulse * beatPulse;
+    const v = beatPulse * beatPulse;
+    // subdue effects on the menu and before the song actually syncs
+    const subdued = state === STATE_READY || audioStatus !== 'playing';
+    return subdued ? v * 0.3 : v;
   }
 
   best = parseInt(localStorage.getItem('maverick_best') || '0', 10) || 0;
