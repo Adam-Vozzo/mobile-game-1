@@ -162,16 +162,16 @@
   <h3>BEAT DEBUG</h3>
   <div class="row"><span>status</span><span id="d-status">—</span></div>
   <div class="row"><span>BPM</span><span id="d-bpm">—</span></div>
-  <div class="row"><span>energy</span><span id="d-energy">—</span></div>
+  <div class="row"><span>flux</span><span id="d-energy">—</span></div>
   <div class="row"><span>avg</span><span id="d-avg">—</span></div>
   <div class="row"><span>ratio</span><span id="d-ratio">—</span></div>
   <div class="row"><span>beats D/S</span><span id="d-beats">0 / 0</span></div>
   <div class="flash" id="d-flash"></div>
   <hr>
-  <label><span>thresh</span><input id="d-thresh" type="range" min="1.05" max="2" step="0.01"><span id="d-thresh-v">1.22</span></label>
-  <label><span>floor</span><input id="d-floor" type="range" min="0" max="80" step="1"><span id="d-floor-v">12</span></label>
+  <label><span>thresh</span><input id="d-thresh" type="range" min="1.1" max="4" step="0.05"><span id="d-thresh-v">1.6</span></label>
+  <label><span>floor</span><input id="d-floor" type="range" min="0" max="30" step="0.5"><span id="d-floor-v">3</span></label>
   <label><span>bin start</span><input id="d-binstart" type="range" min="0" max="40" step="1"><span id="d-binstart-v">1</span></label>
-  <label><span>bin end</span><input id="d-binend" type="range" min="2" max="60" step="1"><span id="d-binend-v">9</span></label>
+  <label><span>bin end</span><input id="d-binend" type="range" min="2" max="60" step="1"><span id="d-binend-v">5</span></label>
   <label><span>refract</span><input id="d-refract" type="range" min="60" max="400" step="10"><span id="d-refract-v">180</span></label>
   <button id="d-reset" type="button">RESET DETECTION</button>
 </div>
@@ -237,6 +237,8 @@
   let audioStatus = 'idle'; // idle | loading | playing | failed | fallback
   const bassHist = [];
   const _freqBuf = new Uint8Array(256);
+  const _prevSpectrum = new Uint8Array(256);
+  let _prevSpectrumValid = false;
   let lastBeatT = -1;
   let lastDetectedT = -1;
   let beatPulse = 0;     // 0..1, decays each frame
@@ -246,10 +248,11 @@
   let beatBPMavg = 0.5;  // average inter-beat interval (s) from detected beats only
 
   // Mutable detection params (driven by debug panel)
-  let beatThresh = 1.22;
-  let beatFloor = 12;
+  // Spectral flux: ratio of current flux spike to rolling avg flux
+  let beatThresh = 1.6;
+  let beatFloor = 3;
   let beatBinStart = 1;
-  let beatBinEnd = 9;
+  let beatBinEnd = 5;
   let beatRefract = 0.18;
   let lastEnergy = 0, lastAvg = 0;
 
@@ -286,17 +289,29 @@
       analyser.getByteFrequencyData(_freqBuf);
       const start = Math.max(0, beatBinStart);
       const end = Math.max(start + 1, beatBinEnd);
-      let energy = 0;
-      for (let i = start; i < end; i++) energy += _freqBuf[i];
-      energy /= (end - start);
-      bassHist.push(energy);
-      if (bassHist.length > 50) bassHist.shift();
+
+      // Spectral flux within band: sum of positive bin-to-bin deltas vs
+      // the previous frame, normalized by band width. Sustained bass
+      // produces near-zero flux; sharp attacks (kicks) produce spikes.
+      let flux = 0;
+      if (_prevSpectrumValid) {
+        for (let i = start; i < end; i++) {
+          const d = _freqBuf[i] - _prevSpectrum[i];
+          if (d > 0) flux += d;
+        }
+        flux /= (end - start);
+      }
+      _prevSpectrum.set(_freqBuf);
+      _prevSpectrumValid = true;
+
+      bassHist.push(flux);
+      if (bassHist.length > 30) bassHist.shift();
       let avg = 0;
       for (const v of bassHist) avg += v;
       avg /= bassHist.length;
-      lastEnergy = energy;
+      lastEnergy = flux;
       lastAvg = avg;
-      if (bassHist.length > 20 && energy > avg * beatThresh && energy > beatFloor && now - lastBeatT > beatRefract) {
+      if (bassHist.length > 12 && flux > avg * beatThresh && flux > beatFloor && now - lastBeatT > beatRefract) {
         triggerBeat(now, true);
         detected = true;
       }
@@ -777,6 +792,7 @@
       beatBPMavg = 0.5;
       lastEnergy = 0;
       lastAvg = 0;
+      _prevSpectrumValid = false;
     });
   } else {
     // expose nothing — production users see no panel
