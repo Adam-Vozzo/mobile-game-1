@@ -153,6 +153,86 @@
   let flashAlpha;
   let overTimer;
 
+  // ---- audio + beat sync ------------------------------------------------
+  // Drop a song.mp3 next to index.html and the game world locks to its
+  // beat. With no file, falls back to a steady 120 BPM pulse.
+  const AUDIO_FILE = './song.mp3';
+  let audioCtx = null;
+  let audioSource = null;
+  let analyser = null;
+  let audioStatus = 'idle'; // idle | loading | playing | failed | fallback
+  const bassHist = [];
+  const _freqBuf = new Uint8Array(256);
+  let lastBeatT = -1;
+  let beatPulse = 0;     // 0..1, decays each frame
+  let beatCount = 0;
+  let beatBPMavg = 0.5;  // average inter-beat interval (s)
+
+  async function startAudio() {
+    if (audioStatus !== 'idle') return;
+    audioStatus = 'loading';
+    try {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      audioCtx = new Ctx();
+      if (audioCtx.state === 'suspended') await audioCtx.resume();
+      const res = await fetch(AUDIO_FILE);
+      if (!res.ok) throw new Error('no song');
+      const arr = await res.arrayBuffer();
+      const buf = await audioCtx.decodeAudioData(arr);
+      audioSource = audioCtx.createBufferSource();
+      audioSource.buffer = buf;
+      audioSource.loop = true;
+      analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 512;
+      analyser.smoothingTimeConstant = 0.55;
+      audioSource.connect(analyser);
+      analyser.connect(audioCtx.destination);
+      audioSource.start();
+      audioStatus = 'playing';
+    } catch (e) {
+      audioStatus = 'fallback';
+    }
+  }
+
+  function tickBeat(now, dt) {
+    beatPulse = Math.max(0, beatPulse - dt * 5);
+    if (analyser) {
+      analyser.getByteFrequencyData(_freqBuf);
+      // bass band: lowest 5 bins (~0–215 Hz @ fftSize 512, sr 44.1k)
+      let energy = 0;
+      for (let i = 1; i < 6; i++) energy += _freqBuf[i];
+      energy /= 5;
+      bassHist.push(energy);
+      if (bassHist.length > 50) bassHist.shift();
+      let avg = 0;
+      for (const v of bassHist) avg += v;
+      avg /= bassHist.length;
+      const ready = bassHist.length > 20;
+      if (ready && energy > avg * 1.45 && energy > 35 && now - lastBeatT > 0.18) {
+        triggerBeat(now);
+      }
+    } else if (audioStatus === 'fallback' || audioStatus === 'idle') {
+      // 120 BPM fallback so the world still throbs without audio
+      const period = 0.5;
+      if (now - lastBeatT > period) triggerBeat(now);
+    }
+  }
+
+  function triggerBeat(now) {
+    if (lastBeatT > 0) {
+      const dt = now - lastBeatT;
+      if (dt > 0.2 && dt < 1.2) beatBPMavg = beatBPMavg * 0.85 + dt * 0.15;
+    }
+    beatPulse = 1;
+    beatCount++;
+    lastBeatT = now;
+  }
+
+  function beatEase() {
+    // sharp attack, smooth decay
+    return beatPulse * beatPulse;
+  }
+
   best = parseInt(localStorage.getItem('maverick_best') || '0', 10) || 0;
 
   function reset() {
@@ -181,6 +261,7 @@
   function flap() {
     if (state === STATE_READY) {
       state = STATE_PLAY;
+      startAudio();
     }
     if (state === STATE_PLAY) {
       player.vy = FLAP_VEL;
@@ -206,11 +287,19 @@
 
   // Draw helpers ----------------------------------------------------------
   function drawBackground() {
+    const bp = beatEase();
+
     ctx.fillStyle = COL_BG;
     ctx.fillRect(0, 0, W, H);
 
-    // perspective grid lines (vanishing point at center)
-    ctx.strokeStyle = COL_LINE;
+    // beat-driven magenta wash
+    if (bp > 0) {
+      ctx.fillStyle = `rgba(255, 0, 149, ${bp * 0.07})`;
+      ctx.fillRect(0, 0, W, H);
+    }
+
+    // perspective grid — lines pulse brighter on beat, switch to neon on beat
+    ctx.strokeStyle = bp > 0.4 ? COL_PLAYER : COL_LINE;
     ctx.lineWidth = 1;
     const horizonY = H / 2;
     const linesAhead = 14;
@@ -219,7 +308,7 @@
       const eased = t * t;
       const yTop = horizonY - eased * horizonY;
       const yBot = horizonY + eased * (H - horizonY);
-      ctx.globalAlpha = 0.25 + eased * 0.5;
+      ctx.globalAlpha = (0.25 + eased * 0.5) * (1 + bp * 0.9);
       ctx.beginPath();
       ctx.moveTo(0, yTop);
       ctx.lineTo(W, yTop);
@@ -229,12 +318,12 @@
     }
     ctx.globalAlpha = 1;
 
-    // vertical scrolling rails for added speed sense
-    ctx.strokeStyle = COL_LINE;
+    // vertical scrolling rails — pulse to cyan on beat
+    ctx.strokeStyle = bp > 0.4 ? COL_WALL : COL_LINE;
     const railSpacing = 60;
     const off = scrollOffset % railSpacing;
     for (let x = -off; x < W; x += railSpacing) {
-      ctx.globalAlpha = 0.35;
+      ctx.globalAlpha = 0.35 * (1 + bp * 1.3);
       ctx.beginPath();
       ctx.moveTo(x, 0);
       ctx.lineTo(x, H);
@@ -261,6 +350,7 @@
   }
 
   function drawWall(p) {
+    const bp = beatEase();
     const gapBottom = p.top + GAP_SIZE;
     const topH = p.top;
     const botY = gapBottom;
@@ -268,7 +358,7 @@
 
     // glow
     ctx.shadowColor = COL_WALL_GLOW;
-    ctx.shadowBlur = 14;
+    ctx.shadowBlur = 14 + bp * 18;
 
     // bars
     ctx.fillStyle = COL_WALL;
@@ -278,12 +368,13 @@
     // bright edge
     ctx.shadowBlur = 0;
     ctx.fillStyle = COL_WALL_GLOW;
-    ctx.fillRect(p.x + WALL_THICK - 3, 0, 3, topH);
-    ctx.fillRect(p.x + WALL_THICK - 3, botY, 3, botH);
+    const edgeW = 3 + bp * 4;
+    ctx.fillRect(p.x + WALL_THICK - edgeW, 0, edgeW, topH);
+    ctx.fillRect(p.x + WALL_THICK - edgeW, botY, edgeW, botH);
 
     // spike tips at gap edges
     ctx.shadowColor = COL_WALL_GLOW;
-    ctx.shadowBlur = 12;
+    ctx.shadowBlur = 12 + bp * 14;
     ctx.fillStyle = COL_WALL;
     drawSpikeRow(p.x, p.top, WALL_THICK, 14, +1);
     drawSpikeRow(p.x, gapBottom, WALL_THICK, 14, -1);
@@ -304,13 +395,16 @@
   }
 
   function drawPlayer() {
+    const bp = beatEase();
     ctx.save();
     ctx.translate(player.x, player.y);
     ctx.rotate(player.rot);
+    const scale = 1 + bp * 0.18;
+    ctx.scale(scale, scale);
 
     // glow
     ctx.shadowColor = COL_PLAYER_GLOW;
-    ctx.shadowBlur = 22;
+    ctx.shadowBlur = 22 + bp * 18;
 
     // triangular ship pointing right
     const s = PLAYER_SIZE;
@@ -338,12 +432,13 @@
   }
 
   function drawBoundaries() {
-    // ceiling and floor as glowing pink lines (lethal)
+    const bp = beatEase();
     ctx.shadowColor = COL_PLAYER_GLOW;
-    ctx.shadowBlur = 12;
+    ctx.shadowBlur = 12 + bp * 18;
     ctx.fillStyle = COL_PLAYER;
-    ctx.fillRect(0, 0, W, 3);
-    ctx.fillRect(0, H - 3, W, 3);
+    const t = 3 + bp * 4;
+    ctx.fillRect(0, 0, W, t);
+    ctx.fillRect(0, H - t, W, t);
     ctx.shadowBlur = 0;
   }
 
@@ -374,6 +469,7 @@
   function update(dt) {
     time += dt;
     if (shake > 0) shake = Math.max(0, shake - dt * 3);
+    tickBeat(time, dt);
 
     if (state === STATE_READY) {
       player.y = H * 0.5 + Math.sin(time * 5) * 8;
@@ -451,6 +547,16 @@
 
   function render() {
     ctx.save();
+    const bp = beatEase();
+
+    // camera zoom punch on beat
+    if (bp > 0) {
+      const z = 1 + bp * 0.025;
+      ctx.translate(W * 0.5, H * 0.5);
+      ctx.scale(z, z);
+      ctx.translate(-W * 0.5, -H * 0.5);
+    }
+
     if (shake > 0) {
       const mag = shake * 10;
       ctx.translate((Math.random() - 0.5) * mag, (Math.random() - 0.5) * mag);
@@ -463,15 +569,25 @@
     drawPlayer();
 
     if (state === STATE_PLAY) {
-      drawTextCentered(String(score), 38, 36, COL_HUD, COL_PLAYER_GLOW);
+      const sz = 36 + bp * 16;
+      drawTextCentered(String(score), 38, sz, COL_HUD, COL_PLAYER_GLOW);
     }
 
     if (state === STATE_READY) {
-      drawTextCentered('MAVERICK', H * 0.32, 40, COL_PLAYER, COL_PLAYER_GLOW);
+      drawTextCentered('MAVERICK', H * 0.32, 40 + bp * 6, COL_PLAYER, COL_PLAYER_GLOW);
       drawTextCentered('TAP TO FLAP', H * 0.58, 16, COL_WALL, COL_WALL_GLOW);
       const pulse = 0.55 + Math.sin(time * 5) * 0.45;
       ctx.globalAlpha = pulse;
       drawTextCentered('TAP TO START', H * 0.74, 14, COL_HUD, null);
+      ctx.globalAlpha = 1;
+
+      // tiny audio status hint
+      const hint = audioStatus === 'playing' ? '♪ SYNCED'
+                 : audioStatus === 'loading' ? '♪ LOADING'
+                 : audioStatus === 'fallback' ? 'NO AUDIO — 120 BPM'
+                 : '♪ AUDIO ON TAP';
+      ctx.globalAlpha = 0.6;
+      drawTextCentered(hint, H * 0.92, 10, COL_WALL_GLOW, null);
       ctx.globalAlpha = 1;
     }
 
