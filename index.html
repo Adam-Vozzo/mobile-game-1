@@ -318,6 +318,11 @@
     flashAlpha = 0;
     overTimer = 0;
     state = STATE_READY;
+    // beat detection times are in `time` units, which we just zeroed —
+    // wipe them too so the refractory window doesn't lock out new beats
+    lastBeatT = -1;
+    lastDetectedT = -1;
+    beatPulse = 0;
   }
   reset();
 
