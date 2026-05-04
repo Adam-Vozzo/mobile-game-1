@@ -92,6 +92,37 @@
     #wrap { display: none; }
     #rotate-prompt { display: flex; }
   }
+  #debug {
+    display: none;
+    position: fixed;
+    top: 8px;
+    right: 8px;
+    width: 240px;
+    background: rgba(10, 6, 18, 0.92);
+    border: 1px solid #ff0095;
+    border-radius: 6px;
+    padding: 10px;
+    color: #fff;
+    font: 11px/1.35 ui-monospace, Menlo, Consolas, monospace;
+    z-index: 50;
+    box-shadow: 0 0 14px rgba(255, 0, 149, 0.35);
+  }
+  #debug.show { display: block; }
+  #debug h3 { font-size: 11px; letter-spacing: 1px; color: #ff5cb8; margin: 0 0 6px; }
+  #debug .row { display: flex; justify-content: space-between; gap: 8px; }
+  #debug .row span:last-child { color: #7df0ff; }
+  #debug hr { border: none; border-top: 1px solid #2a1640; margin: 8px 0; }
+  #debug label { display: grid; grid-template-columns: 70px 1fr 36px; align-items: center; gap: 6px; }
+  #debug label > span { color: #ccc; }
+  #debug input[type=range] { width: 100%; accent-color: #ff0095; }
+  #debug .flash {
+    height: 12px;
+    background: #2a1640;
+    border-radius: 3px;
+    margin: 6px 0;
+    transition: background 60ms;
+  }
+  #debug .flash.hit { background: #ff0095; box-shadow: 0 0 12px #ff5cb8; }
 </style>
 </head>
 <body>
@@ -100,6 +131,22 @@
   <div class="phone"></div>
   <h1>ROTATE YOUR DEVICE</h1>
   <p>MAVERICK IS A LANDSCAPE GAME</p>
+</div>
+<div id="debug">
+  <h3>BEAT DEBUG</h3>
+  <div class="row"><span>status</span><span id="d-status">—</span></div>
+  <div class="row"><span>BPM</span><span id="d-bpm">—</span></div>
+  <div class="row"><span>energy</span><span id="d-energy">—</span></div>
+  <div class="row"><span>avg</span><span id="d-avg">—</span></div>
+  <div class="row"><span>ratio</span><span id="d-ratio">—</span></div>
+  <div class="row"><span>beats D/S</span><span id="d-beats">0 / 0</span></div>
+  <div class="flash" id="d-flash"></div>
+  <hr>
+  <label><span>thresh</span><input id="d-thresh" type="range" min="1.05" max="2" step="0.01"><span id="d-thresh-v">1.22</span></label>
+  <label><span>floor</span><input id="d-floor" type="range" min="0" max="80" step="1"><span id="d-floor-v">12</span></label>
+  <label><span>bin start</span><input id="d-binstart" type="range" min="0" max="40" step="1"><span id="d-binstart-v">1</span></label>
+  <label><span>bin end</span><input id="d-binend" type="range" min="2" max="60" step="1"><span id="d-binend-v">9</span></label>
+  <label><span>refract</span><input id="d-refract" type="range" min="60" max="400" step="10"><span id="d-refract-v">180</span></label>
 </div>
 <script>
 (() => {
@@ -164,9 +211,20 @@
   const bassHist = [];
   const _freqBuf = new Uint8Array(256);
   let lastBeatT = -1;
+  let lastDetectedT = -1;
   let beatPulse = 0;     // 0..1, decays each frame
   let beatCount = 0;
-  let beatBPMavg = 0.5;  // average inter-beat interval (s)
+  let detectedCount = 0;
+  let safetyCount = 0;
+  let beatBPMavg = 0.5;  // average inter-beat interval (s) from detected beats only
+
+  // Mutable detection params (driven by debug panel)
+  let beatThresh = 1.22;
+  let beatFloor = 12;
+  let beatBinStart = 1;
+  let beatBinEnd = 9;
+  let beatRefract = 0.18;
+  let lastEnergy = 0, lastAvg = 0;
 
   async function startAudio() {
     if (audioStatus !== 'idle') return;
@@ -199,35 +257,43 @@
     let detected = false;
     if (analyser) {
       analyser.getByteFrequencyData(_freqBuf);
-      // wider band — kick + low mids — for songs without a clean bass-only thump
+      const start = Math.max(0, beatBinStart);
+      const end = Math.max(start + 1, beatBinEnd);
       let energy = 0;
-      for (let i = 1; i < 9; i++) energy += _freqBuf[i];
-      energy /= 8;
+      for (let i = start; i < end; i++) energy += _freqBuf[i];
+      energy /= (end - start);
       bassHist.push(energy);
       if (bassHist.length > 50) bassHist.shift();
       let avg = 0;
       for (const v of bassHist) avg += v;
       avg /= bassHist.length;
-      if (bassHist.length > 20 && energy > avg * 1.22 && energy > 12 && now - lastBeatT > 0.18) {
-        triggerBeat(now);
+      lastEnergy = energy;
+      lastAvg = avg;
+      if (bassHist.length > 20 && energy > avg * beatThresh && energy > beatFloor && now - lastBeatT > beatRefract) {
+        triggerBeat(now, true);
         detected = true;
       }
     }
-    // safety pulse: if nothing has fired for 0.5s (no audio, or song with
-    // no detectable transients), throb at a steady 120 BPM
+    // safety pulse: if nothing has fired for 0.5s, throb at a steady 120 BPM
     if (!detected && now - lastBeatT > 0.5) {
-      triggerBeat(now);
+      triggerBeat(now, false);
     }
   }
 
-  function triggerBeat(now) {
-    if (lastBeatT > 0) {
-      const dt = now - lastBeatT;
-      if (dt > 0.2 && dt < 1.2) beatBPMavg = beatBPMavg * 0.85 + dt * 0.15;
+  function triggerBeat(now, isDetected) {
+    if (isDetected && lastDetectedT > 0) {
+      const dt = now - lastDetectedT;
+      if (dt > 0.2 && dt < 1.5) beatBPMavg = beatBPMavg * 0.85 + dt * 0.15;
     }
     beatPulse = 1;
     beatCount++;
     lastBeatT = now;
+    if (isDetected) {
+      lastDetectedT = now;
+      detectedCount++;
+    } else {
+      safetyCount++;
+    }
   }
 
   function beatEase() {
@@ -297,14 +363,8 @@
     ctx.fillStyle = COL_BG;
     ctx.fillRect(0, 0, W, H);
 
-    // beat-driven magenta wash
-    if (bp > 0) {
-      ctx.fillStyle = `rgba(255, 0, 149, ${bp * 0.07})`;
-      ctx.fillRect(0, 0, W, H);
-    }
-
-    // perspective grid — lines pulse brighter on beat, switch to neon on beat
-    ctx.strokeStyle = bp > 0.4 ? COL_PLAYER : COL_LINE;
+    // perspective grid — alpha pulses subtly on beat, color stays muted
+    ctx.strokeStyle = COL_LINE;
     ctx.lineWidth = 1;
     const horizonY = H / 2;
     const linesAhead = 14;
@@ -313,7 +373,7 @@
       const eased = t * t;
       const yTop = horizonY - eased * horizonY;
       const yBot = horizonY + eased * (H - horizonY);
-      ctx.globalAlpha = (0.25 + eased * 0.5) * (1 + bp * 0.9);
+      ctx.globalAlpha = (0.25 + eased * 0.5) * (1 + bp * 0.35);
       ctx.beginPath();
       ctx.moveTo(0, yTop);
       ctx.lineTo(W, yTop);
@@ -323,12 +383,12 @@
     }
     ctx.globalAlpha = 1;
 
-    // vertical scrolling rails — pulse to cyan on beat
-    ctx.strokeStyle = bp > 0.4 ? COL_WALL : COL_LINE;
+    // vertical scrolling rails — same muted pulse
+    ctx.strokeStyle = COL_LINE;
     const railSpacing = 60;
     const off = scrollOffset % railSpacing;
     for (let x = -off; x < W; x += railSpacing) {
-      ctx.globalAlpha = 0.35 * (1 + bp * 1.3);
+      ctx.globalAlpha = 0.35 * (1 + bp * 0.4);
       ctx.beginPath();
       ctx.moveTo(x, 0);
       ctx.lineTo(x, H);
@@ -613,6 +673,63 @@
     }
 
     ctx.restore();
+
+    // on-canvas detected-beat indicator (debug only)
+    if (debugMode) {
+      const since = time - lastDetectedT;
+      const fresh = lastDetectedT > 0 && since < 0.12;
+      ctx.fillStyle = fresh ? '#ffffff' : 'rgba(255,255,255,0.18)';
+      if (fresh) { ctx.shadowColor = '#ff0095'; ctx.shadowBlur = 18; }
+      ctx.fillRect(12, H - 22, 14, 14);
+      ctx.shadowBlur = 0;
+      ctx.fillStyle = 'rgba(255,255,255,0.55)';
+      ctx.font = '10px ui-monospace, Menlo, Consolas, monospace';
+      ctx.textAlign = 'left';
+      ctx.fillText('DETECTED', 32, H - 11);
+    }
+  }
+
+  // ---- debug panel wiring ----------------------------------------------
+  const debugMode = new URLSearchParams(location.search).has('debug');
+  if (debugMode) {
+    const $ = (id) => document.getElementById(id);
+    $('debug').classList.add('show');
+    const sliders = [
+      ['d-thresh',   beatThresh,         (v) => beatThresh = v],
+      ['d-floor',    beatFloor,          (v) => beatFloor = v],
+      ['d-binstart', beatBinStart,       (v) => beatBinStart = v|0],
+      ['d-binend',   beatBinEnd,         (v) => beatBinEnd = v|0],
+      ['d-refract',  beatRefract * 1000, (v) => beatRefract = v / 1000],
+    ];
+    for (const [id, init, fn] of sliders) {
+      const el = $(id);
+      el.value = init;
+      const v = $(id + '-v');
+      v.textContent = el.value;
+      el.addEventListener('input', () => {
+        fn(+el.value);
+        v.textContent = el.value;
+        // when changing band/threshold, drop the rolling history so the
+        // new params take effect immediately rather than averaging in
+        if (id === 'd-binstart' || id === 'd-binend') bassHist.length = 0;
+      });
+    }
+    let lastFlashHit = false;
+    setInterval(() => {
+      $('d-status').textContent = audioStatus;
+      $('d-bpm').textContent = beatBPMavg > 0 ? (60 / beatBPMavg).toFixed(0) : '—';
+      $('d-energy').textContent = lastEnergy.toFixed(1);
+      $('d-avg').textContent = lastAvg.toFixed(1);
+      $('d-ratio').textContent = lastAvg > 0 ? (lastEnergy / lastAvg).toFixed(2) : '—';
+      $('d-beats').textContent = `${detectedCount} / ${safetyCount}`;
+      const fresh = lastDetectedT > 0 && (time - lastDetectedT) < 0.12;
+      if (fresh !== lastFlashHit) {
+        $('d-flash').classList.toggle('hit', fresh);
+        lastFlashHit = fresh;
+      }
+    }, 50);
+  } else {
+    // expose nothing — production users see no panel
   }
 })();
 </script>
