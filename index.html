@@ -120,9 +120,35 @@
     background: #2a1640;
     border-radius: 3px;
     margin: 6px 0;
-    transition: background 60ms;
+    overflow: hidden;
+    position: relative;
   }
-  #debug .flash.hit { background: #ff0095; box-shadow: 0 0 12px #ff5cb8; }
+  #debug .flash::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: #ff0095;
+    box-shadow: 0 0 12px #ff5cb8;
+    opacity: 0;
+  }
+  #debug .flash.hit::after { animation: beat-flash 220ms ease-out; }
+  @keyframes beat-flash {
+    0%   { opacity: 1; }
+    100% { opacity: 0; }
+  }
+  #debug button {
+    margin-top: 6px;
+    width: 100%;
+    background: transparent;
+    color: #ff0095;
+    border: 1px solid #ff0095;
+    border-radius: 4px;
+    padding: 6px;
+    font: inherit;
+    letter-spacing: 1px;
+    cursor: pointer;
+  }
+  #debug button:active { background: rgba(255, 0, 149, 0.2); }
 </style>
 </head>
 <body>
@@ -147,6 +173,7 @@
   <label><span>bin start</span><input id="d-binstart" type="range" min="0" max="40" step="1"><span id="d-binstart-v">1</span></label>
   <label><span>bin end</span><input id="d-binend" type="range" min="2" max="60" step="1"><span id="d-binend-v">9</span></label>
   <label><span>refract</span><input id="d-refract" type="range" min="60" max="400" step="10"><span id="d-refract-v">180</span></label>
+  <button id="d-reset" type="button">RESET DETECTION</button>
 </div>
 <script>
 (() => {
@@ -679,12 +706,13 @@
 
     ctx.restore();
 
-    // on-canvas detected-beat indicator (debug only)
+    // on-canvas detected-beat indicator (debug only) — fades over 150ms so
+    // rapid-fire detection still reads as distinct pulses
     if (debugMode) {
       const since = time - lastDetectedT;
-      const fresh = lastDetectedT > 0 && since < 0.12;
-      ctx.fillStyle = fresh ? '#ffffff' : 'rgba(255,255,255,0.18)';
-      if (fresh) { ctx.shadowColor = '#ff0095'; ctx.shadowBlur = 18; }
+      const k = lastDetectedT > 0 ? Math.max(0, 1 - since / 0.15) : 0;
+      ctx.fillStyle = `rgba(255,255,255,${0.18 + k * 0.82})`;
+      if (k > 0) { ctx.shadowColor = '#ff0095'; ctx.shadowBlur = 18 * k; }
       ctx.fillRect(12, H - 22, 14, 14);
       ctx.shadowBlur = 0;
       ctx.fillStyle = 'rgba(255,255,255,0.55)';
@@ -719,7 +747,8 @@
         if (id === 'd-binstart' || id === 'd-binend') bassHist.length = 0;
       });
     }
-    let lastFlashHit = false;
+    let lastFlashedCount = 0;
+    const flashEl = $('d-flash');
     setInterval(() => {
       $('d-status').textContent = audioStatus;
       $('d-bpm').textContent = beatBPMavg > 0 ? (60 / beatBPMavg).toFixed(0) : '—';
@@ -727,12 +756,28 @@
       $('d-avg').textContent = lastAvg.toFixed(1);
       $('d-ratio').textContent = lastAvg > 0 ? (lastEnergy / lastAvg).toFixed(2) : '—';
       $('d-beats').textContent = `${detectedCount} / ${safetyCount}`;
-      const fresh = lastDetectedT > 0 && (time - lastDetectedT) < 0.12;
-      if (fresh !== lastFlashHit) {
-        $('d-flash').classList.toggle('hit', fresh);
-        lastFlashHit = fresh;
+      // restart the flash animation each time the detected counter ticks
+      if (detectedCount !== lastFlashedCount) {
+        flashEl.classList.remove('hit');
+        // force reflow so the animation re-runs even on rapid fire
+        void flashEl.offsetWidth;
+        flashEl.classList.add('hit');
+        lastFlashedCount = detectedCount;
       }
     }, 50);
+
+    $('d-reset').addEventListener('click', () => {
+      bassHist.length = 0;
+      detectedCount = 0;
+      safetyCount = 0;
+      beatCount = 0;
+      lastBeatT = -1;
+      lastDetectedT = -1;
+      beatPulse = 0;
+      beatBPMavg = 0.5;
+      lastEnergy = 0;
+      lastAvg = 0;
+    });
   } else {
     // expose nothing — production users see no panel
   }
