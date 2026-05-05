@@ -241,6 +241,18 @@
   const STATE_READY = 0, STATE_PLAY = 1, STATE_OVER = 2;
   let state = STATE_READY;
 
+  const MODE_GATES = 'gates';
+  const MODE_RINGS = 'rings';
+  const MODE_TUNNEL = 'tunnel';
+  let mode = MODE_GATES;
+  const RING_RADIUS = 38;
+  const RING_INTERVAL = 1.0;
+  const TUNNEL_GAP = 170;
+  const TUNNEL_SAMPLE_SPACING = 36;
+  let rings = [];
+  let tunnelSamples = [];
+  let scrollDistance = 0; // for tunnel-mode scoring
+
   // Tuning — Maverick Bird-style, landscape
   const GRAVITY = 750;
   const FLAP_VEL = -290;
@@ -389,9 +401,13 @@
 
   best = parseInt(localStorage.getItem('maverick_best') || '0', 10) || 0;
 
-  function reset() {
+  function reset(newMode) {
+    if (newMode !== undefined) mode = newMode;
     player = { x: PLAYER_X, y: H * 0.5, vy: 0, rot: 0, flapTimer: 0 };
     walls = [];
+    rings = [];
+    tunnelSamples = [];
+    scrollDistance = 0;
     score = 0;
     spawnTimer = 0;
     time = 0;
@@ -401,11 +417,24 @@
     flashAlpha = 0;
     overTimer = 0;
     state = STATE_READY;
-    // beat detection times are in `time` units, which we just zeroed —
-    // wipe them too so the refractory window doesn't lock out new beats
     lastBeatT = -1;
     lastDetectedT = -1;
     beatPulse = 0;
+    if (mode === MODE_TUNNEL) initTunnel();
+  }
+
+  function initTunnel() {
+    tunnelSamples.length = 0;
+    let mid = H * 0.5;
+    for (let x = 0; x <= W + TUNNEL_SAMPLE_SPACING * 4; x += TUNNEL_SAMPLE_SPACING) {
+      tunnelSamples.push({ x, midY: mid });
+      mid = clampMid(mid + (Math.random() - 0.5) * 50);
+    }
+  }
+
+  function clampMid(v) {
+    const margin = 30;
+    return Math.max(TUNNEL_GAP / 2 + margin, Math.min(H - TUNNEL_GAP / 2 - margin, v));
   }
   reset();
 
@@ -417,28 +446,142 @@
     walls.push({ x: W + 10, top, passed: false });
   }
 
+  function updateGates(dt) {
+    spawnTimer += dt;
+    if (spawnTimer >= WALL_INTERVAL) {
+      spawnTimer = 0;
+      spawnWall();
+    }
+    for (const w of walls) w.x -= SCROLL_SPEED * dt;
+    while (walls.length && walls[0].x + WALL_THICK < -10) walls.shift();
+    for (const w of walls) {
+      if (!w.passed && w.x + WALL_THICK < player.x - PLAYER_SIZE) {
+        w.passed = true;
+        score++;
+      }
+      const inX = player.x + PLAYER_SIZE > w.x && player.x - PLAYER_SIZE < w.x + WALL_THICK;
+      if (inX) {
+        if (player.y - PLAYER_SIZE < w.top || player.y + PLAYER_SIZE > w.top + GAP_SIZE) {
+          die();
+        }
+      }
+    }
+  }
+
+  function spawnRing() {
+    const margin = 60;
+    const y = margin + Math.random() * (H - margin * 2);
+    rings.push({ x: W + 30, y, passed: false, scored: false, flashT: 0 });
+  }
+
+  function updateRings(dt) {
+    spawnTimer += dt;
+    if (spawnTimer >= RING_INTERVAL) {
+      spawnTimer = 0;
+      spawnRing();
+    }
+    for (const r of rings) {
+      r.x -= SCROLL_SPEED * dt;
+      if (r.flashT > 0) r.flashT = Math.max(0, r.flashT - dt);
+    }
+    while (rings.length && rings[0].x < -RING_RADIUS * 2) rings.shift();
+    for (const r of rings) {
+      if (!r.passed && r.x < player.x) {
+        r.passed = true;
+        // generous tolerance: bird mostly inside ring counts
+        const dy = Math.abs(r.y - player.y);
+        if (dy < RING_RADIUS - PLAYER_SIZE * 0.4) {
+          score++;
+          r.scored = true;
+        }
+        r.flashT = 0.45;
+      }
+    }
+  }
+
+  function updateTunnel(dt) {
+    if (tunnelSamples.length === 0) initTunnel();
+    for (const s of tunnelSamples) s.x -= SCROLL_SPEED * dt;
+    while (tunnelSamples.length > 1 && tunnelSamples[0].x < -TUNNEL_SAMPLE_SPACING * 2) {
+      tunnelSamples.shift();
+    }
+    let last = tunnelSamples[tunnelSamples.length - 1];
+    while (last.x < W + TUNNEL_SAMPLE_SPACING * 4) {
+      const newX = last.x + TUNNEL_SAMPLE_SPACING;
+      const newMid = clampMid(last.midY + (Math.random() - 0.5) * 60);
+      tunnelSamples.push({ x: newX, midY: newMid });
+      last = tunnelSamples[tunnelSamples.length - 1];
+    }
+    // collision: lerp midY at player.x
+    const mid = tunnelMidAtX(player.x);
+    if (Math.abs(player.y - mid) > TUNNEL_GAP / 2 - PLAYER_SIZE * 0.6) {
+      die();
+    }
+    // scoring: 1 point per 220 px advanced
+    scrollDistance += SCROLL_SPEED * dt;
+    while (scrollDistance >= 220) {
+      scrollDistance -= 220;
+      score++;
+    }
+  }
+
+  function tunnelMidAtX(x) {
+    for (let i = 0; i < tunnelSamples.length - 1; i++) {
+      const a = tunnelSamples[i], b = tunnelSamples[i + 1];
+      if (a.x <= x && b.x > x) {
+        const t = (x - a.x) / (b.x - a.x);
+        return a.midY + (b.midY - a.midY) * t;
+      }
+    }
+    return H * 0.5;
+  }
+
   function flap() {
-    if (state === STATE_READY) {
-      state = STATE_PLAY;
-      startAudio();
-    }
-    if (state === STATE_PLAY) {
-      player.vy = FLAP_VEL;
-      player.flapTimer = 0.15;
-    } else if (state === STATE_OVER) {
-      if (overTimer > 0.6) reset();
-    }
+    player.vy = FLAP_VEL;
+    player.flapTimer = 0.15;
+  }
+
+  function startGame(m) {
+    reset(m);
+    state = STATE_PLAY;
+    startAudio();
+  }
+
+  function canvasCoords(e) {
+    const rect = canvas.getBoundingClientRect();
+    return {
+      x: (e.clientX - rect.left) * W / rect.width,
+      y: (e.clientY - rect.top) * H / rect.height,
+    };
   }
 
   function onTap(e) {
     if (e.cancelable) e.preventDefault();
-    flap();
+    const { x, y } = canvasCoords(e);
+    if (state === STATE_READY) {
+      for (const b of menuButtons) {
+        if (hitButton(b, x, y)) { startGame(b.mode); return; }
+      }
+      return;
+    }
+    if (state === STATE_PLAY) { flap(); return; }
+    if (state === STATE_OVER && overTimer > 0.4) {
+      for (const b of overButtons) {
+        if (hitButton(b, x, y)) {
+          if (b.action === 'retry') startGame(mode);
+          else if (b.action === 'menu') reset(mode);
+          return;
+        }
+      }
+    }
   }
   canvas.addEventListener('pointerdown', onTap, { passive: false });
   window.addEventListener('keydown', (e) => {
     if (e.code === 'Space' || e.code === 'ArrowUp' || e.code === 'KeyW') {
       e.preventDefault();
-      flap();
+      if (state === STATE_READY) startGame(mode);
+      else if (state === STATE_PLAY) flap();
+      else if (state === STATE_OVER && overTimer > 0.4) startGame(mode);
     }
   });
   document.addEventListener('gesturestart', (e) => e.preventDefault());
@@ -570,17 +713,7 @@
     ctx.closePath();
     ctx.fill();
 
-    // bright core
     ctx.shadowBlur = 0;
-    ctx.fillStyle = '#ffffff';
-    ctx.beginPath();
-    ctx.moveTo(s * 0.55, 0);
-    ctx.lineTo(-s * 0.2, -s * 0.4);
-    ctx.lineTo(-s * 0.05, 0);
-    ctx.lineTo(-s * 0.2, s * 0.4);
-    ctx.closePath();
-    ctx.fill();
-
     ctx.restore();
   }
 
@@ -608,6 +741,122 @@
     ctx.shadowBlur = 0;
   }
 
+  // Buttons ---------------------------------------------------------------
+  const menuButtons = [
+    { x: 50,  y: 150, w: 160, h: 70, label: 'GATES',  mode: MODE_GATES,
+      sub: 'die on miss' },
+    { x: 240, y: 150, w: 160, h: 70, label: 'RINGS',  mode: MODE_RINGS,
+      sub: 'no fail' },
+    { x: 430, y: 150, w: 160, h: 70, label: 'TUNNEL', mode: MODE_TUNNEL,
+      sub: 'snake corridor' },
+  ];
+  const overButtons = [
+    { x: 195, y: 240, w: 110, h: 44, label: 'RETRY', action: 'retry' },
+    { x: 335, y: 240, w: 110, h: 44, label: 'MENU',  action: 'menu' },
+  ];
+
+  function hitButton(b, x, y) {
+    return x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h;
+  }
+
+  function drawButton(b) {
+    const bp = beatEase();
+    ctx.save();
+    ctx.fillStyle = 'rgba(10, 6, 18, 0.55)';
+    ctx.fillRect(b.x, b.y, b.w, b.h);
+    ctx.strokeStyle = COL_PLAYER;
+    ctx.shadowColor = COL_PLAYER_GLOW;
+    ctx.shadowBlur = 10 + bp * 14;
+    ctx.lineWidth = 2;
+    ctx.strokeRect(b.x, b.y, b.w, b.h);
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = COL_PLAYER;
+    ctx.font = '900 18px "Helvetica Neue", Arial, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.shadowColor = COL_PLAYER_GLOW;
+    ctx.shadowBlur = 8;
+    const labelY = b.sub ? b.y + b.h * 0.42 : b.y + b.h * 0.5;
+    ctx.fillText(b.label, b.x + b.w / 2, labelY);
+    ctx.shadowBlur = 0;
+    if (b.sub) {
+      ctx.font = '500 10px "Helvetica Neue", Arial, sans-serif';
+      ctx.fillStyle = 'rgba(125, 240, 255, 0.75)';
+      ctx.fillText(b.sub, b.x + b.w / 2, b.y + b.h * 0.72);
+    }
+    ctx.restore();
+  }
+
+  function drawRings() {
+    const bp = beatEase();
+    for (const r of rings) {
+      let color = COL_WALL;
+      let glow = COL_WALL_GLOW;
+      if (r.passed && r.flashT > 0) {
+        const k = r.flashT / 0.45;
+        if (r.scored) {
+          color = '#7df0ff';
+          glow = '#00d4ff';
+        } else {
+          color = '#ff5cb8';
+          glow = '#ff0095';
+        }
+        ctx.globalAlpha = 0.4 + 0.6 * k;
+      }
+      ctx.strokeStyle = color;
+      ctx.shadowColor = glow;
+      ctx.shadowBlur = 14 + bp * 18;
+      ctx.lineWidth = 5;
+      ctx.beginPath();
+      ctx.arc(r.x, r.y, RING_RADIUS, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = glow;
+      ctx.beginPath();
+      ctx.arc(r.x, r.y, RING_RADIUS - 5, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  function drawTunnel() {
+    if (tunnelSamples.length < 2) return;
+    const bp = beatEase();
+    ctx.fillStyle = COL_WALL;
+    ctx.shadowColor = COL_WALL_GLOW;
+    ctx.shadowBlur = 14 + bp * 18;
+
+    // top wall polygon
+    ctx.beginPath();
+    ctx.moveTo(tunnelSamples[0].x, 0);
+    for (const s of tunnelSamples) ctx.lineTo(s.x, s.midY - TUNNEL_GAP / 2);
+    ctx.lineTo(tunnelSamples[tunnelSamples.length - 1].x, 0);
+    ctx.closePath();
+    ctx.fill();
+
+    // bottom wall polygon
+    ctx.beginPath();
+    ctx.moveTo(tunnelSamples[0].x, H);
+    for (const s of tunnelSamples) ctx.lineTo(s.x, s.midY + TUNNEL_GAP / 2);
+    ctx.lineTo(tunnelSamples[tunnelSamples.length - 1].x, H);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.shadowBlur = 0;
+    // bright inner edge
+    ctx.strokeStyle = COL_WALL_GLOW;
+    ctx.lineWidth = 2 + bp * 2;
+    ctx.beginPath();
+    ctx.moveTo(tunnelSamples[0].x, tunnelSamples[0].midY - TUNNEL_GAP / 2);
+    for (const s of tunnelSamples) ctx.lineTo(s.x, s.midY - TUNNEL_GAP / 2);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(tunnelSamples[0].x, tunnelSamples[0].midY + TUNNEL_GAP / 2);
+    for (const s of tunnelSamples) ctx.lineTo(s.x, s.midY + TUNNEL_GAP / 2);
+    ctx.stroke();
+  }
+
   // Loop ------------------------------------------------------------------
   let lastT = performance.now();
   function loop(now) {
@@ -625,7 +874,9 @@
     tickBeat(time, dt);
 
     if (state === STATE_READY) {
-      player.y = H * 0.5 + Math.sin(time * 5) * 8;
+      // park the bird in the lower-center gap between buttons and hint
+      player.x = W * 0.5;
+      player.y = H - 60 + Math.sin(time * 5) * 6;
       player.rot = Math.sin(time * 3) * 0.15;
       scrollOffset += SCROLL_SPEED * 0.4 * dt;
       pushTrail(SCROLL_SPEED * 0.4 * dt);
@@ -640,29 +891,11 @@
       const targetRot = Math.max(-0.7, Math.min(1.1, player.vy / 700));
       player.rot += (targetRot - player.rot) * Math.min(1, dt * 10);
 
-      spawnTimer += dt;
-      if (spawnTimer >= WALL_INTERVAL) {
-        spawnTimer = 0;
-        spawnWall();
-      }
+      if (mode === MODE_GATES) updateGates(dt);
+      else if (mode === MODE_RINGS) updateRings(dt);
+      else if (mode === MODE_TUNNEL) updateTunnel(dt);
 
-      for (const w of walls) w.x -= SCROLL_SPEED * dt;
-      while (walls.length && walls[0].x + WALL_THICK < -10) walls.shift();
-
-      for (const w of walls) {
-        if (!w.passed && w.x + WALL_THICK < player.x - PLAYER_SIZE) {
-          w.passed = true;
-          score++;
-        }
-        const inX = player.x + PLAYER_SIZE > w.x && player.x - PLAYER_SIZE < w.x + WALL_THICK;
-        if (inX) {
-          if (player.y - PLAYER_SIZE < w.top || player.y + PLAYER_SIZE > w.top + GAP_SIZE) {
-            die();
-          }
-        }
-      }
-
-      // ceiling / floor are lethal
+      // ceiling / floor are lethal in every mode
       if (player.y - PLAYER_SIZE < 4 || player.y + PLAYER_SIZE > H - 4) {
         player.y = Math.max(PLAYER_SIZE + 4, Math.min(H - PLAYER_SIZE - 4, player.y));
         die();
@@ -716,7 +949,13 @@
     }
 
     drawBackground();
-    for (const w of walls) drawWall(w);
+    if (mode === MODE_GATES) {
+      for (const w of walls) drawWall(w);
+    } else if (mode === MODE_RINGS) {
+      drawRings();
+    } else if (mode === MODE_TUNNEL) {
+      drawTunnel();
+    }
     drawBoundaries();
     drawTrail();
     drawPlayer();
@@ -724,15 +963,20 @@
     if (state === STATE_PLAY) {
       const sz = 36 + bp * 16;
       drawTextCentered(String(score), 38, sz, COL_HUD, COL_PLAYER_GLOW);
+      // small BEST badge in top-right
+      ctx.font = '600 12px ui-monospace, Menlo, Consolas, monospace';
+      ctx.textAlign = 'right';
+      ctx.textBaseline = 'top';
+      ctx.fillStyle = 'rgba(125, 240, 255, 0.85)';
+      ctx.shadowColor = COL_WALL_GLOW;
+      ctx.shadowBlur = 6;
+      ctx.fillText('BEST  ' + best, W - 14, 14);
+      ctx.shadowBlur = 0;
     }
 
     if (state === STATE_READY) {
-      drawTextCentered('MAVERICK', H * 0.32, 40 + bp * 6, COL_PLAYER, COL_PLAYER_GLOW);
-      drawTextCentered('TAP TO FLAP', H * 0.58, 16, COL_WALL, COL_WALL_GLOW);
-      const pulse = 0.55 + Math.sin(time * 5) * 0.45;
-      ctx.globalAlpha = pulse;
-      drawTextCentered('TAP TO START', H * 0.74, 14, COL_HUD, null);
-      ctx.globalAlpha = 1;
+      drawTextCentered('MAVERICK', 70, 40 + bp * 6, COL_PLAYER, COL_PLAYER_GLOW);
+      for (const b of menuButtons) drawButton(b);
 
       // tiny audio status hint
       const hint = audioStatus === 'playing' ? '♪ SYNCED'
@@ -740,7 +984,7 @@
                  : audioStatus === 'fallback' ? 'NO AUDIO — 120 BPM'
                  : '♪ AUDIO ON TAP';
       ctx.globalAlpha = 0.6;
-      drawTextCentered(hint, H * 0.92, 10, COL_WALL_GLOW, null);
+      drawTextCentered(hint, H - 18, 10, COL_WALL_GLOW, null);
       ctx.globalAlpha = 1;
     }
 
@@ -749,14 +993,11 @@
         ctx.fillStyle = `rgba(255, 0, 149, ${flashAlpha * 0.6})`;
         ctx.fillRect(0, 0, W, H);
       }
-      drawTextCentered('CRASHED', H * 0.28, 32, COL_PLAYER, COL_PLAYER_GLOW);
-      drawTextCentered(String(score), H * 0.50, 48, COL_HUD, COL_WALL_GLOW);
-      drawTextCentered('BEST  ' + best, H * 0.68, 16, COL_WALL, COL_WALL_GLOW);
-      if (overTimer > 0.6) {
-        const pulse = 0.55 + Math.sin(time * 6) * 0.45;
-        ctx.globalAlpha = pulse;
-        drawTextCentered('TAP TO RETRY', H * 0.84, 14, COL_HUD, null);
-        ctx.globalAlpha = 1;
+      drawTextCentered('CRASHED', 60, 28, COL_PLAYER, COL_PLAYER_GLOW);
+      drawTextCentered(String(score), 130, 44, COL_HUD, COL_WALL_GLOW);
+      drawTextCentered('BEST  ' + best, 180, 14, COL_WALL, COL_WALL_GLOW);
+      if (overTimer > 0.4) {
+        for (const b of overButtons) drawButton(b);
       }
     }
 
