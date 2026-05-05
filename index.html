@@ -245,8 +245,8 @@
   const MODE_RINGS = 'rings';
   const MODE_TUNNEL = 'tunnel';
   let mode = MODE_GATES;
-  const RING_RX = 38;       // horizontal radius — full
-  const RING_RY = 24;       // vertical radius — squashed for tilted look
+  const RING_RX = 22;       // horizontal radius — narrow (ring tilted around vertical axis)
+  const RING_RY = 38;       // vertical radius — full
   const RING_INTERVAL = 1.0;
   const TUNNEL_GAP = 130;
   const TUNNEL_SAMPLE_SPACING = 36;
@@ -482,7 +482,7 @@
   function spawnRing() {
     const margin = 60;
     const y = margin + Math.random() * (H - margin * 2);
-    rings.push({ x: W + 30, y, passed: false, scored: false, flashT: 0 });
+    rings.push({ x: W + 30, y, passed: false, through: false, scored: false, flashT: 0 });
   }
 
   function updateRings(dt) {
@@ -497,11 +497,20 @@
     }
     while (rings.length && rings[0].x < -RING_RX * 2) rings.shift();
     for (const r of rings) {
-      if (!r.passed && r.x < player.x) {
+      if (r.passed) continue;
+      // Swept check: if at any frame during the ring's traversal of the
+      // player's x range the bird's centre is inside the ellipse, mark
+      // the ring as "through". Then commit the score when the ring fully
+      // exits behind the player.
+      const dx = player.x - r.x;
+      if (Math.abs(dx) < RING_RX) {
+        const dy = r.y - player.y;
+        const norm = (dx * dx) / (RING_RX * RING_RX) + (dy * dy) / (RING_RY * RING_RY);
+        if (norm < 1) r.through = true;
+      }
+      if (r.x + RING_RX < player.x) {
         r.passed = true;
-        // tighter tolerance: bird must actually fly through the middle
-        const dy = Math.abs(r.y - player.y);
-        if (dy < RING_RY - PLAYER_SIZE * 0.6) {
+        if (r.through) {
           score++;
           r.scored = true;
         }
@@ -806,56 +815,36 @@
     return { color: COL_WALL, glow: COL_WALL_GLOW };
   }
 
-  // Draw the back half (top arc) of every ring — call before drawPlayer.
-  // The tilt + ellipse squash, combined with rendering the bottom half
-  // after the bird, gives the "flying through the hoop" effect.
-  function drawRingsBack() {
+  // The ring is a vertical ellipse (rx<ry), tilted around its vertical
+  // axis like a Sonic ring. Render the LEFT half before the bird and
+  // the RIGHT half after, so as the ring scrolls past PLAYER_X the bird
+  // appears to thread through the middle.
+  function drawRingHalf(r, kind) {
     const bp = beatEase();
-    for (const r of rings) {
-      const { color, glow } = ringColors(r);
-      const a = r.passed && r.flashT > 0 ? 0.4 + 0.6 * (r.flashT / 0.45) : 1;
-      ctx.globalAlpha = a;
-      ctx.strokeStyle = color;
-      ctx.shadowColor = glow;
-      ctx.shadowBlur = 14 + bp * 18;
-      ctx.lineWidth = 5;
-      ctx.beginPath();
-      // top half: angles π → 2π (going through 3π/2 at top of ellipse)
-      ctx.ellipse(r.x, r.y, RING_RX, RING_RY, 0, Math.PI, 2 * Math.PI);
-      ctx.stroke();
-      ctx.shadowBlur = 0;
-      ctx.lineWidth = 2;
-      ctx.strokeStyle = glow;
-      ctx.beginPath();
-      ctx.ellipse(r.x, r.y, RING_RX - 5, RING_RY - 4, 0, Math.PI, 2 * Math.PI);
-      ctx.stroke();
-    }
+    const { color, glow } = ringColors(r);
+    const a = r.passed && r.flashT > 0 ? 0.4 + 0.6 * (r.flashT / 0.45) : 1;
+    ctx.globalAlpha = a;
+    // canvas angles: 0=right, π/2=bottom, π=left, 3π/2=top
+    const start = kind === 'back' ? Math.PI / 2 : -Math.PI / 2;
+    const end   = kind === 'back' ? 3 * Math.PI / 2 : Math.PI / 2;
+    ctx.strokeStyle = color;
+    ctx.shadowColor = glow;
+    ctx.shadowBlur = 14 + bp * 18;
+    ctx.lineWidth = 5;
+    ctx.beginPath();
+    ctx.ellipse(r.x, r.y, RING_RX, RING_RY, 0, start, end);
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+    ctx.strokeStyle = glow;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.ellipse(r.x, r.y, RING_RX - 4, RING_RY - 4, 0, start, end);
+    ctx.stroke();
     ctx.globalAlpha = 1;
   }
 
-  function drawRingsFront() {
-    const bp = beatEase();
-    for (const r of rings) {
-      const { color, glow } = ringColors(r);
-      const a = r.passed && r.flashT > 0 ? 0.4 + 0.6 * (r.flashT / 0.45) : 1;
-      ctx.globalAlpha = a;
-      ctx.strokeStyle = color;
-      ctx.shadowColor = glow;
-      ctx.shadowBlur = 14 + bp * 18;
-      ctx.lineWidth = 5;
-      ctx.beginPath();
-      // bottom half: 0 → π
-      ctx.ellipse(r.x, r.y, RING_RX, RING_RY, 0, 0, Math.PI);
-      ctx.stroke();
-      ctx.shadowBlur = 0;
-      ctx.lineWidth = 2;
-      ctx.strokeStyle = glow;
-      ctx.beginPath();
-      ctx.ellipse(r.x, r.y, RING_RX - 5, RING_RY - 4, 0, 0, Math.PI);
-      ctx.stroke();
-    }
-    ctx.globalAlpha = 1;
-  }
+  function drawRingsBack()  { for (const r of rings) drawRingHalf(r, 'back'); }
+  function drawRingsFront() { for (const r of rings) drawRingHalf(r, 'front'); }
 
   function drawTunnel() {
     if (tunnelSamples.length < 2) return;
