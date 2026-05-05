@@ -1026,9 +1026,7 @@
     const $ = (id) => document.getElementById(id);
     const debugPanel = $('debug');
     const helpBtn = $('help-toggle');
-    if (new URLSearchParams(location.search).has('debug')) {
-      debugPanel.classList.add('show');
-    }
+    // panel always starts closed; user opens it via the ? button
     helpBtn.addEventListener('pointerdown', (e) => {
       e.stopPropagation();
       e.preventDefault();
