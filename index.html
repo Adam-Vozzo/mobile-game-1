@@ -219,21 +219,36 @@
   const canvas = document.getElementById('game');
   const ctx = canvas.getContext('2d');
 
-  const W = 640;
+  // World height is fixed at 360; world width scales with device aspect
+  // ratio so the game fills the screen instead of letterboxing the sides.
+  let W = 640;
   const H = 360;
+  const W_MIN = 480, W_MAX = 960;
 
   function resize() {
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    const aspect = W / H;
-    let cw = window.innerWidth;
-    let ch = window.innerHeight;
-    if (cw / ch > aspect) cw = ch * aspect;
-    else ch = cw / aspect;
+    const cw = window.innerWidth;
+    const ch = window.innerHeight;
+    W = Math.max(W_MIN, Math.min(W_MAX, Math.round(H * cw / ch)));
     canvas.style.width = cw + 'px';
     canvas.style.height = ch + 'px';
     canvas.width = Math.floor(W * dpr);
     canvas.height = Math.floor(H * dpr);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    layoutButtons();
+  }
+  let _buttonsReady = false;
+  function layoutButtons() {
+    if (!_buttonsReady) return;
+    // 3 menu buttons centered with 30px gaps
+    const bw = 160, gap = 30;
+    const total = 3 * bw + 2 * gap;
+    const startX = (W - total) / 2;
+    menuButtons[0].x = startX;
+    menuButtons[1].x = startX + bw + gap;
+    menuButtons[2].x = startX + 2 * (bw + gap);
+    overButtons[0].x = W / 2 - 130;
+    overButtons[1].x = W / 2 + 20;
   }
   window.addEventListener('resize', resize);
   resize();
@@ -783,6 +798,8 @@
     { x: 195, y: 240, w: 110, h: 44, label: 'RETRY', action: 'retry' },
     { x: 335, y: 240, w: 110, h: 44, label: 'MENU',  action: 'menu' },
   ];
+  _buttonsReady = true;
+  layoutButtons();
 
   function hitButton(b, x, y) {
     return x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h;
