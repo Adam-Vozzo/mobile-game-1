@@ -248,9 +248,9 @@
   const RING_RX = 22;       // horizontal radius — narrow (ring tilted around vertical axis)
   const RING_RY = 38;       // vertical radius — full
   const RING_INTERVAL = 1.0;
-  const TUNNEL_GAP = 130;
+  const TUNNEL_GAP = 170;
   const TUNNEL_SAMPLE_SPACING = 36;
-  const TUNNEL_WALK = 100;
+  const TUNNEL_WALK = 60;
   let rings = [];
   let tunnelSamples = [];
   let scrollDistance = 0; // for tunnel-mode scoring
@@ -258,7 +258,10 @@
   // Tuning — Maverick Bird-style, landscape
   const GRAVITY = 750;
   const FLAP_VEL = -290;
-  const SCROLL_SPEED = 420;
+  const SCROLL_SPEED_MIN = 360;
+  const SCROLL_SPEED_MAX = 620;
+  const SCROLL_SPEED_RAMP = 10;   // px/s² — reaches max in ~26s
+  let scrollSpeed = SCROLL_SPEED_MIN;
   const WALL_INTERVAL = 1.3;
   const WALL_THICK = 26;
   const GAP_SIZE = 105;
@@ -419,6 +422,7 @@
     rings = [];
     tunnelSamples = [];
     scrollDistance = 0;
+    scrollSpeed = SCROLL_SPEED_MIN;
     score = 0;
     spawnTimer = 0;
     time = 0;
@@ -436,10 +440,15 @@
 
   function initTunnel() {
     tunnelSamples.length = 0;
+    // Plant the first stretch dead-centre so the player never spawns
+    // inside a wall. The walk only starts once we're past PLAYER_X.
+    const safeUntilX = PLAYER_X + 80;
     let mid = H * 0.5;
     for (let x = 0; x <= W + TUNNEL_SAMPLE_SPACING * 4; x += TUNNEL_SAMPLE_SPACING) {
       tunnelSamples.push({ x, midY: mid });
-      mid = clampMid(mid + (Math.random() - 0.5) * TUNNEL_WALK * 0.7);
+      if (x >= safeUntilX) {
+        mid = clampMid(mid + (Math.random() - 0.5) * TUNNEL_WALK * 0.7);
+      }
     }
   }
 
@@ -463,7 +472,7 @@
       spawnTimer = 0;
       spawnWall();
     }
-    for (const w of walls) w.x -= SCROLL_SPEED * dt;
+    for (const w of walls) w.x -= scrollSpeed * dt;
     while (walls.length && walls[0].x + WALL_THICK < -10) walls.shift();
     for (const w of walls) {
       if (!w.passed && w.x + WALL_THICK < player.x - PLAYER_SIZE) {
@@ -492,7 +501,7 @@
       spawnRing();
     }
     for (const r of rings) {
-      r.x -= SCROLL_SPEED * dt;
+      r.x -= scrollSpeed * dt;
       if (r.flashT > 0) r.flashT = Math.max(0, r.flashT - dt);
     }
     while (rings.length && rings[0].x < -RING_RX * 2) rings.shift();
@@ -521,7 +530,7 @@
 
   function updateTunnel(dt) {
     if (tunnelSamples.length === 0) initTunnel();
-    for (const s of tunnelSamples) s.x -= SCROLL_SPEED * dt;
+    for (const s of tunnelSamples) s.x -= scrollSpeed * dt;
     while (tunnelSamples.length > 1 && tunnelSamples[0].x < -TUNNEL_SAMPLE_SPACING * 2) {
       tunnelSamples.shift();
     }
@@ -538,7 +547,7 @@
       die();
     }
     // scoring: 1 point per 220 px advanced
-    scrollDistance += SCROLL_SPEED * dt;
+    scrollDistance += scrollSpeed * dt;
     while (scrollDistance >= 220) {
       scrollDistance -= 220;
       score++;
@@ -904,12 +913,15 @@
       player.x = W * 0.5;
       player.y = H - 60 + Math.sin(time * 5) * 6;
       player.rot = Math.sin(time * 3) * 0.15;
-      scrollOffset += SCROLL_SPEED * 0.4 * dt;
-      pushTrail(SCROLL_SPEED * 0.4 * dt);
+      scrollOffset += scrollSpeed * 0.4 * dt;
+      pushTrail(scrollSpeed * 0.4 * dt);
       return;
     }
 
     if (state === STATE_PLAY) {
+      // ramp scroll speed from min toward max over time
+      scrollSpeed = Math.min(SCROLL_SPEED_MAX, scrollSpeed + SCROLL_SPEED_RAMP * dt);
+
       player.vy += GRAVITY * dt;
       player.y += player.vy * dt;
       player.flapTimer = Math.max(0, player.flapTimer - dt);
@@ -927,8 +939,8 @@
         die();
       }
 
-      scrollOffset += SCROLL_SPEED * dt;
-      pushTrail(SCROLL_SPEED * dt);
+      scrollOffset += scrollSpeed * dt;
+      pushTrail(scrollSpeed * dt);
     }
 
     if (state === STATE_OVER) {
