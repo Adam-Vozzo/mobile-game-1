@@ -1013,6 +1013,18 @@
     if (state === STATE_READY) {
       drawTextCentered('MAVERICK', 70, 40 + bp * 6, COL_PLAYER, COL_PLAYER_GLOW);
       for (const b of menuButtons) drawButton(b);
+      // per-mode best score under each button
+      ctx.font = '700 11px ui-monospace, Menlo, Consolas, monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'top';
+      for (const b of menuButtons) {
+        const bv = bestScores[b.mode] || 0;
+        ctx.fillStyle = bv > 0 ? 'rgba(125, 240, 255, 0.9)' : 'rgba(125, 240, 255, 0.35)';
+        ctx.shadowColor = COL_WALL_GLOW;
+        ctx.shadowBlur = bv > 0 ? 6 : 0;
+        ctx.fillText('BEST  ' + bv, b.x + b.w / 2, b.y + b.h + 8);
+      }
+      ctx.shadowBlur = 0;
 
       // tiny audio status hint
       const hint = audioStatus === 'playing' ? '♪ SYNCED'
