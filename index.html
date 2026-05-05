@@ -316,8 +316,10 @@
         detected = true;
       }
     }
-    // safety pulse: if nothing has fired for 0.5s, throb at a steady 120 BPM
-    if (!detected && now - lastBeatT > 0.5) {
+    // safety pulse — ONLY when we're not analysing live audio. When a
+    // song is playing, the world should pulse only on real detections;
+    // gaps without transients should mean stillness.
+    if (!detected && !analyser && now - lastBeatT > 0.5) {
       triggerBeat(now, false);
     }
   }
