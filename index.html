@@ -245,10 +245,12 @@
   const MODE_RINGS = 'rings';
   const MODE_TUNNEL = 'tunnel';
   let mode = MODE_GATES;
-  const RING_RADIUS = 38;
+  const RING_RX = 38;       // horizontal radius — full
+  const RING_RY = 24;       // vertical radius — squashed for tilted look
   const RING_INTERVAL = 1.0;
-  const TUNNEL_GAP = 170;
+  const TUNNEL_GAP = 130;
   const TUNNEL_SAMPLE_SPACING = 36;
+  const TUNNEL_WALK = 100;
   let rings = [];
   let tunnelSamples = [];
   let scrollDistance = 0; // for tunnel-mode scoring
@@ -272,7 +274,7 @@
   const COL_LINE = '#2a1640';
   const COL_HUD = '#ffffff';
 
-  let player, walls, score, best, spawnTimer, time, scrollOffset;
+  let player, walls, score, spawnTimer, time, scrollOffset;
   let trail;
   let shake;
   let flashAlpha;
@@ -399,7 +401,16 @@
     return subdued ? v * 0.3 : v;
   }
 
-  best = parseInt(localStorage.getItem('maverick_best') || '0', 10) || 0;
+  // Per-mode best scores stored as a JSON object
+  let bestScores = {};
+  try { bestScores = JSON.parse(localStorage.getItem('maverick_bests') || '{}') || {}; } catch (e) {}
+  function getBest() { return bestScores[mode] || 0; }
+  function maybeUpdateBest() {
+    if (score > (bestScores[mode] || 0)) {
+      bestScores[mode] = score;
+      try { localStorage.setItem('maverick_bests', JSON.stringify(bestScores)); } catch (e) {}
+    }
+  }
 
   function reset(newMode) {
     if (newMode !== undefined) mode = newMode;
@@ -428,7 +439,7 @@
     let mid = H * 0.5;
     for (let x = 0; x <= W + TUNNEL_SAMPLE_SPACING * 4; x += TUNNEL_SAMPLE_SPACING) {
       tunnelSamples.push({ x, midY: mid });
-      mid = clampMid(mid + (Math.random() - 0.5) * 50);
+      mid = clampMid(mid + (Math.random() - 0.5) * TUNNEL_WALK * 0.7);
     }
   }
 
@@ -484,13 +495,13 @@
       r.x -= SCROLL_SPEED * dt;
       if (r.flashT > 0) r.flashT = Math.max(0, r.flashT - dt);
     }
-    while (rings.length && rings[0].x < -RING_RADIUS * 2) rings.shift();
+    while (rings.length && rings[0].x < -RING_RX * 2) rings.shift();
     for (const r of rings) {
       if (!r.passed && r.x < player.x) {
         r.passed = true;
-        // generous tolerance: bird mostly inside ring counts
+        // tighter tolerance: bird must actually fly through the middle
         const dy = Math.abs(r.y - player.y);
-        if (dy < RING_RADIUS - PLAYER_SIZE * 0.4) {
+        if (dy < RING_RY - PLAYER_SIZE * 0.6) {
           score++;
           r.scored = true;
         }
@@ -508,7 +519,7 @@
     let last = tunnelSamples[tunnelSamples.length - 1];
     while (last.x < W + TUNNEL_SAMPLE_SPACING * 4) {
       const newX = last.x + TUNNEL_SAMPLE_SPACING;
-      const newMid = clampMid(last.midY + (Math.random() - 0.5) * 60);
+      const newMid = clampMid(last.midY + (Math.random() - 0.5) * TUNNEL_WALK);
       tunnelSamples.push({ x: newX, midY: newMid });
       last = tunnelSamples[tunnelSamples.length - 1];
     }
@@ -787,37 +798,63 @@
     ctx.restore();
   }
 
-  function drawRings() {
+  function ringColors(r) {
+    if (r.passed && r.flashT > 0) {
+      if (r.scored) return { color: '#7df0ff', glow: '#00d4ff' };
+      return { color: '#ff5cb8', glow: '#ff0095' };
+    }
+    return { color: COL_WALL, glow: COL_WALL_GLOW };
+  }
+
+  // Draw the back half (top arc) of every ring — call before drawPlayer.
+  // The tilt + ellipse squash, combined with rendering the bottom half
+  // after the bird, gives the "flying through the hoop" effect.
+  function drawRingsBack() {
     const bp = beatEase();
     for (const r of rings) {
-      let color = COL_WALL;
-      let glow = COL_WALL_GLOW;
-      if (r.passed && r.flashT > 0) {
-        const k = r.flashT / 0.45;
-        if (r.scored) {
-          color = '#7df0ff';
-          glow = '#00d4ff';
-        } else {
-          color = '#ff5cb8';
-          glow = '#ff0095';
-        }
-        ctx.globalAlpha = 0.4 + 0.6 * k;
-      }
+      const { color, glow } = ringColors(r);
+      const a = r.passed && r.flashT > 0 ? 0.4 + 0.6 * (r.flashT / 0.45) : 1;
+      ctx.globalAlpha = a;
       ctx.strokeStyle = color;
       ctx.shadowColor = glow;
       ctx.shadowBlur = 14 + bp * 18;
       ctx.lineWidth = 5;
       ctx.beginPath();
-      ctx.arc(r.x, r.y, RING_RADIUS, 0, Math.PI * 2);
+      // top half: angles π → 2π (going through 3π/2 at top of ellipse)
+      ctx.ellipse(r.x, r.y, RING_RX, RING_RY, 0, Math.PI, 2 * Math.PI);
       ctx.stroke();
       ctx.shadowBlur = 0;
       ctx.lineWidth = 2;
       ctx.strokeStyle = glow;
       ctx.beginPath();
-      ctx.arc(r.x, r.y, RING_RADIUS - 5, 0, Math.PI * 2);
+      ctx.ellipse(r.x, r.y, RING_RX - 5, RING_RY - 4, 0, Math.PI, 2 * Math.PI);
       ctx.stroke();
-      ctx.globalAlpha = 1;
     }
+    ctx.globalAlpha = 1;
+  }
+
+  function drawRingsFront() {
+    const bp = beatEase();
+    for (const r of rings) {
+      const { color, glow } = ringColors(r);
+      const a = r.passed && r.flashT > 0 ? 0.4 + 0.6 * (r.flashT / 0.45) : 1;
+      ctx.globalAlpha = a;
+      ctx.strokeStyle = color;
+      ctx.shadowColor = glow;
+      ctx.shadowBlur = 14 + bp * 18;
+      ctx.lineWidth = 5;
+      ctx.beginPath();
+      // bottom half: 0 → π
+      ctx.ellipse(r.x, r.y, RING_RX, RING_RY, 0, 0, Math.PI);
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = glow;
+      ctx.beginPath();
+      ctx.ellipse(r.x, r.y, RING_RX - 5, RING_RY - 4, 0, 0, Math.PI);
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
   }
 
   function drawTunnel() {
@@ -925,10 +962,7 @@
     overTimer = 0;
     flashAlpha = 1;
     shake = 1;
-    if (score > best) {
-      best = score;
-      localStorage.setItem('maverick_best', String(best));
-    }
+    maybeUpdateBest();
   }
 
   function render() {
@@ -951,14 +985,15 @@
     drawBackground();
     if (mode === MODE_GATES) {
       for (const w of walls) drawWall(w);
-    } else if (mode === MODE_RINGS) {
-      drawRings();
     } else if (mode === MODE_TUNNEL) {
       drawTunnel();
+    } else if (mode === MODE_RINGS) {
+      drawRingsBack();
     }
     drawBoundaries();
     drawTrail();
     drawPlayer();
+    if (mode === MODE_RINGS) drawRingsFront();
 
     if (state === STATE_PLAY) {
       const sz = 36 + bp * 16;
@@ -970,7 +1005,7 @@
       ctx.fillStyle = 'rgba(125, 240, 255, 0.85)';
       ctx.shadowColor = COL_WALL_GLOW;
       ctx.shadowBlur = 6;
-      ctx.fillText('BEST  ' + best, W - 14, 14);
+      ctx.fillText('BEST  ' + getBest(), W - 14, 14);
       ctx.shadowBlur = 0;
     }
 
@@ -995,7 +1030,7 @@
       }
       drawTextCentered('CRASHED', 60, 28, COL_PLAYER, COL_PLAYER_GLOW);
       drawTextCentered(String(score), 130, 44, COL_HUD, COL_WALL_GLOW);
-      drawTextCentered('BEST  ' + best, 180, 14, COL_WALL, COL_WALL_GLOW);
+      drawTextCentered('BEST  ' + getBest(), 180, 14, COL_WALL, COL_WALL_GLOW);
       if (overTimer > 0.4) {
         for (const b of overButtons) drawButton(b);
       }
