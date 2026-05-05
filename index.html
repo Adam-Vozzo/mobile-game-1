@@ -136,7 +136,8 @@
     0%   { opacity: 1; }
     100% { opacity: 0; }
   }
-  #debug button {
+  #debug { position: relative; }
+  #debug button#d-reset {
     margin-top: 6px;
     width: 100%;
     background: transparent;
@@ -148,7 +149,43 @@
     letter-spacing: 1px;
     cursor: pointer;
   }
-  #debug button:active { background: rgba(255, 0, 149, 0.2); }
+  #debug button#d-reset:active { background: rgba(255, 0, 149, 0.2); }
+  #debug .close {
+    position: absolute;
+    top: 4px;
+    right: 6px;
+    width: 22px;
+    height: 22px;
+    background: transparent;
+    border: none;
+    color: #ff5cb8;
+    font: 700 18px/1 ui-monospace, Menlo, Consolas, monospace;
+    cursor: pointer;
+    padding: 0;
+    margin: 0;
+  }
+  #help-toggle {
+    position: fixed;
+    bottom: 14px;
+    right: 14px;
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    background: rgba(10, 6, 18, 0.55);
+    border: 1.5px solid #ff0095;
+    color: #ff5cb8;
+    font: 700 16px/1 ui-monospace, Menlo, Consolas, monospace;
+    cursor: pointer;
+    z-index: 60;
+    box-shadow: 0 0 10px rgba(255, 0, 149, 0.35);
+    text-shadow: 0 0 6px #ff5cb8;
+    -webkit-tap-highlight-color: transparent;
+  }
+  #help-toggle[hidden] { display: none; }
+  #help-toggle:active { background: rgba(255, 0, 149, 0.2); }
+  @media (orientation: portrait) {
+    #help-toggle { display: none !important; }
+  }
 </style>
 </head>
 <body>
@@ -168,13 +205,15 @@
   <div class="row"><span>beats D/S</span><span id="d-beats">0 / 0</span></div>
   <div class="flash" id="d-flash"></div>
   <hr>
-  <label><span>thresh</span><input id="d-thresh" type="range" min="1.1" max="4" step="0.05"><span id="d-thresh-v">1.6</span></label>
-  <label><span>floor</span><input id="d-floor" type="range" min="0" max="30" step="0.5"><span id="d-floor-v">3</span></label>
-  <label><span>bin start</span><input id="d-binstart" type="range" min="0" max="40" step="1"><span id="d-binstart-v">1</span></label>
+  <label><span>thresh</span><input id="d-thresh" type="range" min="1.1" max="6" step="0.05"><span id="d-thresh-v">3</span></label>
+  <label><span>floor</span><input id="d-floor" type="range" min="0" max="60" step="0.5"><span id="d-floor-v">20</span></label>
+  <label><span>bin start</span><input id="d-binstart" type="range" min="0" max="40" step="1"><span id="d-binstart-v">0</span></label>
   <label><span>bin end</span><input id="d-binend" type="range" min="2" max="60" step="1"><span id="d-binend-v">5</span></label>
-  <label><span>refract</span><input id="d-refract" type="range" min="60" max="400" step="10"><span id="d-refract-v">180</span></label>
+  <label><span>refract</span><input id="d-refract" type="range" min="60" max="400" step="10"><span id="d-refract-v">200</span></label>
   <button id="d-reset" type="button">RESET DETECTION</button>
+  <button id="d-close" class="close" type="button" aria-label="Close">×</button>
 </div>
+<button id="help-toggle" type="button" aria-label="Beat debug">?</button>
 <script>
 (() => {
   const canvas = document.getElementById('game');
@@ -249,11 +288,11 @@
 
   // Mutable detection params (driven by debug panel)
   // Spectral flux: ratio of current flux spike to rolling avg flux
-  let beatThresh = 1.6;
-  let beatFloor = 3;
-  let beatBinStart = 1;
+  let beatThresh = 3;
+  let beatFloor = 20;
+  let beatBinStart = 0;
   let beatBinEnd = 5;
-  let beatRefract = 0.18;
+  let beatRefract = 0.2;
   let lastEnergy = 0, lastAvg = 0;
 
   async function startAudio() {
@@ -723,9 +762,8 @@
 
     ctx.restore();
 
-    // on-canvas detected-beat indicator (debug only) — fades over 150ms so
-    // rapid-fire detection still reads as distinct pulses
-    if (debugMode) {
+    // on-canvas detected-beat indicator — only when the debug panel is open
+    if (document.getElementById('debug').classList.contains('show')) {
       const since = time - lastDetectedT;
       const k = lastDetectedT > 0 ? Math.max(0, 1 - since / 0.15) : 0;
       ctx.fillStyle = `rgba(255,255,255,${0.18 + k * 0.82})`;
@@ -740,10 +778,35 @@
   }
 
   // ---- debug panel wiring ----------------------------------------------
-  const debugMode = new URLSearchParams(location.search).has('debug');
+  // The panel itself is always wired up; visibility is toggled via the
+  // help (?) button on the main menu, or auto-shown via ?debug URL param.
+  const debugMode = true;
   if (debugMode) {
     const $ = (id) => document.getElementById(id);
-    $('debug').classList.add('show');
+    const debugPanel = $('debug');
+    const helpBtn = $('help-toggle');
+    if (new URLSearchParams(location.search).has('debug')) {
+      debugPanel.classList.add('show');
+    }
+    helpBtn.addEventListener('pointerdown', (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      debugPanel.classList.toggle('show');
+    });
+    $('d-close').addEventListener('pointerdown', (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      debugPanel.classList.remove('show');
+    });
+    // hide the help icon outside the main menu so it doesn't clutter gameplay
+    let helpVisible = null;
+    setInterval(() => {
+      const want = state === STATE_READY;
+      if (want !== helpVisible) {
+        helpVisible = want;
+        helpBtn.hidden = !want;
+      }
+    }, 100);
     const sliders = [
       ['d-thresh',   beatThresh,         (v) => beatThresh = v],
       ['d-floor',    beatFloor,          (v) => beatFloor = v],
